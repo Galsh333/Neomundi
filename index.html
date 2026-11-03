@@ -6173,7 +6173,7 @@ function idbOpen(){return new Promise((res,rej)=>{try{const r=indexedDB.open('ar
 let idbT=null;
 function idbMirror(){clearTimeout(idbT);idbT=setTimeout(async()=>{try{const db=await idbOpen();db.transaction('kv','readwrite').objectStore('kv').put({all:ACCS,t:Date.now()},'accs')}catch(e){}},400)}
 function idbRead(){return new Promise(res=>{idbOpen().then(db=>{const q=db.transaction('kv').objectStore('kv').get('accs');q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)}).catch(()=>res(null))})}
-function fixAccs(){Object.values(ACCS).forEach(a=>{if(!a.id)a.id=makeId();if(!a.f)a.f=[];if(!a.matches)a.matches=[];if(!a.byHero)a.byHero={};if(!a.lvl)a.lvl=1;if(!a.xp)a.xp=0;if(!a.stats)a.stats={games:0,wins:0,losses:0,kills:0,deaths:0,assists:0}})}
+function fixAccs(){Object.keys(ACCS).forEach(k=>{const a=ACCS[k];if(a&&a.uid&&a.n&&/^g_/.test(k)){const nk=String(a.n).toLowerCase();if(!ACCS[nk]){ACCS[nk]=a;delete ACCS[k]}}});Object.values(ACCS).forEach(a=>{if(!a.id)a.id=makeId();if(!a.f)a.f=[];if(!a.matches)a.matches=[];if(!a.byHero)a.byHero={};if(!a.lvl)a.lvl=1;if(!a.xp)a.xp=0;if(!a.stats)a.stats={games:0,wins:0,losses:0,kills:0,deaths:0,assists:0}})}
 function downloadBackup(){const txt=enc({all:ACCS,ver:2});try{const bl=new Blob([txt],{type:'text/plain'}),u=URL.createObjectURL(bl),a=document.createElement('a');a.href=u;a.download='arena-moba-contas-'+new Date().toISOString().slice(0,10)+'.txt';document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},1500);say('Backup baixado. Guarde o arquivo em um lugar seguro (Drive, e-mail, WhatsApp).')}catch(e){prompt('Copie e guarde este backup:',txt)}}
 function importBackup(raw){try{const o=dec(raw||'');if(o.all)Object.entries(o.all).forEach(([k,a])=>ACCS[k]=a);else if(o.k&&o.a)ACCS[o.k]=o.a;else throw 0;fixAccs();saveAcc();return true}catch(e){return false}}
 /* ===== Login na nuvem (Firebase): Google e e-mail/senha + salvamento da conta ===== */
@@ -6186,7 +6186,7 @@ async function fbInit(){
  return fbPend=(async()=>{const B='https://www.gstatic.com/firebasejs/10.12.2/';
   const [app,auth,fs]=await Promise.all([import(B+'firebase-app.js'),import(B+'firebase-auth.js'),import(B+'firebase-firestore.js')]);
   const a=app.initializeApp(FBC);FB={auth,fs,A:auth.getAuth(a),D:fs.getFirestore(a)};
-  auth.onAuthStateChanged(FB.A,u=>{FBU=u});
+  auth.onAuthStateChanged(FB.A,u=>{FBU=u;if(u)setTimeout(async()=>{try{const sn=await fs.getDoc(fs.doc(FB.D,'players',u.uid));if(!sn.exists())await fbPush(true)}catch(e){console.warn('cloud first push',e)}},1500)});
   auth.getRedirectResult(FB.A).then(r=>{if(r&&r.user)fbAfter(r.user)}).catch(()=>{});
   return FB})();
 }
@@ -6194,7 +6194,7 @@ const fbKey=u=>'g_'+u.uid.slice(0,10).toLowerCase();
 const fbName=u=>{const base=String(u.displayName||(u.email||'').split('@')[0]||'Heroi').replace(/[^A-Za-z0-9_]/g,'').slice(0,11)||'Heroi';return base+u.uid.replace(/[^A-Za-z0-9]/g,'').slice(0,4)};
 const fbPack=a=>{const c={...a};delete c.p;let s=JSON.stringify(c);if(s.length>900000){c.matches=(c.matches||[]).slice(-20);s=JSON.stringify(c)}return s};
 async function fbAfter(u){
- try{const {fs,D}=FB,ref=fs.doc(D,'players',u.uid),snap=await fs.getDoc(ref),key=fbKey(u);let a=ACCS[key];
+ try{const {fs,D}=FB,ref=fs.doc(D,'players',u.uid),snap=await fs.getDoc(ref),key=Object.keys(ACCS).find(k=>ACCS[k]&&ACCS[k].uid===u.uid)||fbName(u).toLowerCase();let a=ACCS[key];
   if(snap.exists()){const d=snap.data(),cloud=JSON.parse(d.acc);if(!a||(d.t||0)>=(a._t||0)){cloud.p=hs(Math.random()+'x'+u.uid);cloud.uid=u.uid;cloud._t=d.t||0;a=ACCS[key]=cloud}}
   else if(!a){
    let src=null;const cur=ACCS[(CUR||'').toLowerCase()];
@@ -6202,6 +6202,7 @@ async function fbAfter(u){
    a=ACCS[key]=src?JSON.parse(JSON.stringify(src)):{f:[],id:makeId(),lvl:1,xp:0,matches:[],byHero:{},stats:{games:0,wins:0,losses:0,kills:0,deaths:0,assists:0},skins:[],purchases:[],unlocks:[]};
    a.n=fbName(u);a.uid=u.uid;a.email=u.email||'';a.p=hs(Math.random()+'x'+u.uid)}
   a.uid=u.uid;a.email=u.email||a.email||'';if(!a.n)a.n=fbName(u);
+  {const nk=a.n.toLowerCase();if(key!==nk&&(!ACCS[nk]||ACCS[nk].uid===u.uid)){ACCS[nk]=a;delete ACCS[key]}}
   fixAccs();CUR=a.n;lss('arenaAccs',ACCS);lss('arenaCur',CUR);lss('arenaLast',CUR);idbMirror();ONL={};
   await fbPush(true);goOnline();friends();say('☁ Conectado como '+a.n+'. Seu progresso agora é salvo na nuvem.')
  }catch(e){console.error(e);say('Falha ao sincronizar: '+fbMsg(e)+' (confira as regras do Firestore).')}
