@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Editor de Mapa — Neomundi</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1320;--pn:#12203a;--ln:#27406b;--tx:#e8f1ff;--mut:#8fa6c8;--ac:#ffb91e}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px system-ui,sans-serif;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%}
+#top{display:flex;gap:6px;align-items:center;padding:6px 8px;background:var(--pn);border-bottom:1px solid var(--ln);overflow-x:auto;flex:none}
+#top b{white-space:nowrap;margin-right:4px}
+button{font:inherit;color:var(--tx);background:#1b3158;border:1px solid var(--ln);border-radius:9px;padding:7px 10px;cursor:pointer;white-space:nowrap;touch-action:manipulation}
+button.on{background:var(--ac);color:#33200a;border-color:#fff8;font-weight:800}
+button.dng{background:#5b1f27;border-color:#b24a55}
+#wrap{flex:1;min-height:0;position:relative}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#hint{position:absolute;left:8px;top:8px;background:#0b1320cc;border:1px solid var(--ln);border-radius:8px;padding:4px 8px;font-size:11px;color:var(--mut);pointer-events:none;max-width:60%}
+#zoom{position:absolute;right:8px;top:8px;display:flex;flex-direction:column;gap:6px}
+#zoom button{width:38px;height:38px;padding:0;font-size:18px}
+#bot{flex:none;background:var(--pn);border-top:1px solid var(--ln);height:min(36vh,250px);overflow:auto}
+#tools{display:flex;gap:6px;padding:6px 8px;overflow-x:auto}
+#panel{padding:4px 8px 10px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-end}
+.f{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mut)}
+.f input,.f select{font:inherit;color:var(--tx);background:#0b1730;border:1px solid var(--ln);border-radius:7px;padding:6px;width:92px}
+.f.chk{flex-direction:row;align-items:center;gap:6px;color:var(--tx)}
+.f.chk input{width:auto}
+h4{margin:4px 0 0;width:100%;font-size:12px;color:var(--ac)}
+#dlg{position:fixed;inset:0;background:#000c;display:none;align-items:center;justify-content:center;padding:12px;z-index:9}
+#dlg.open{display:flex}
+#dlg .bx{background:var(--pn);border:1px solid var(--ln);border-radius:14px;padding:12px;width:min(640px,100%);max-height:92vh;display:flex;flex-direction:column;gap:8px}
+#dlg textarea{flex:1;min-height:200px;background:#06101f;color:#cfe3ff;border:1px solid var(--ln);border-radius:8px;padding:8px;font:11px ui-monospace,monospace;resize:none}
+#dlg .row{display:flex;gap:6px;flex-wrap:wrap}
+#toast{position:fixed;left:50%;bottom:18vh;transform:translateX(-50%);background:#000d;border:1px solid var(--ln);padding:8px 12px;border-radius:10px;display:none;z-index:10}
+</style></head><body>
+<div id="app">
+ <div id="top">
+  <b>🗺️ Editor de Mapa</b>
+  <button id="bUndo">↶ Desfazer</button>
+  <button id="bExp">📤 Exportar</button>
+  <button id="bImp">📥 Importar</button>
+  <button id="bAlign" title="Recalcula a posição (Z) de cada torre pela rota e pelo X dela">📐 Alinhar torres às rotas</button><button id="bTest">▶ Testar no jogo</button>
+  <button id="bReset" class="dng">⟲ Mapa padrão</button>
+ </div>
+ <div id="wrap"><canvas id="cv"></canvas><div id="hint"></div><div id="zoom"><button id="zIn">＋</button><button id="zOut">－</button><button id="zFit" title="Enquadrar">⌖</button></div></div>
+ <div id="bot"><div id="tools"></div><div id="panel"></div></div>
+</div>
+<div id="dlg"><div class="bx"><b id="dTitle"></b><div id="dMsg" style="color:var(--mut);font-size:12px"></div><textarea id="dTxt" spellcheck="false"></textarea><div class="row" id="dBtns"></div></div></div>
+<div id="toast"></div>
+<input type="file" id="fileIn" accept=".json,application/json,text/plain" style="display:none">
+<script>
+/* ===================================================================
+   Editor de Mapa Neomundi
+   - Unidades do mapa = "unidades base" (o jogo multiplica por 1.5).
+   - Exporta JSON: {versao,paredes,moitas,acampamentos,torres,nexus}
+   - "Testar no jogo" grava o mapa no navegador (localStorage nm_map_override) e abre index.html.
+   - Para valer para todos: cole o JSON em window.NM_MAP no começo do index.html.
+   =================================================================== */
+const MK=1.5, LIM_X=25.8, LIM_Z=26.2, LANE_AMP=31.2; /* no jogo as rotas laterais têm abertura 20.8*1.5 = 31.2 (mundo) = 20.8 (base) */
+const DEF_WALLS=[[-24.21,-7.4,2.55,-0.903,0.7,0],[-21.81,-10.39,2.55,-0.879,0.7,0],[-19.36,-13.24,2.55,-0.841,0.7,0],[-16.87,-15.9,2.55,-0.789,0.7,0],[-14.33,-18.31,2.55,-0.718,0.7,0],[-11.69,-20.43,2.55,-0.625,0.7,0],[-8.96,-22.2,2.55,-0.506,0.7,0],[8.96,-22.2,2.55,0.516,0.7,0],[11.69,-20.43,2.55,0.633,0.7,0],[14.33,-18.31,2.55,0.724,0.7,0],[16.87,-15.9,2.55,0.794,0.7,0],[19.36,-13.24,2.55,0.845,0.7,0],[21.81,-10.39,2.55,0.881,0.7,0],[24.21,-7.4,2.55,0.904,0.7,0],[-8.8,-3.92,1.25,-0.035,0.7,0],[-7.25,-14.33,2.55,-0.625,0.7,0],[-5.27,-15.61,2.55,-0.506,0.7,0],[5.27,-15.61,2.55,0.516,0.7,0],[7.25,-14.33,2.55,0.633,0.7,0],[6.77,4.27,2.55,3.142,0.7,0],[28,-7.5,9.1,3.089,1.55,0],[-24.21,7.4,2.55,0.903,0.7,0],[-21.81,10.39,2.55,0.879,0.7,0],[-19.36,13.24,2.55,0.841,0.7,0],[-16.87,15.9,2.55,0.789,0.7,0],[-14.33,18.31,2.55,0.718,0.7,0],[-11.69,20.43,2.55,0.625,0.7,0],[-8.96,22.2,2.55,0.506,0.7,0],[8.96,22.2,2.55,-0.516,0.7,0],[11.69,20.43,2.55,-0.633,0.7,0],[14.33,18.31,2.55,-0.724,0.7,0],[16.87,15.9,2.55,-0.794,0.7,0],[19.36,13.24,2.55,-0.845,0.7,0],[21.81,10.39,2.55,-0.881,0.7,0],[24.21,7.4,2.55,-0.904,0.7,0],[-7.25,14.33,2.55,0.625,0.7,0],[-5.27,15.61,2.55,0.506,0.7,0],[5.27,15.61,2.55,-0.516,0.7,0],[7.25,14.33,2.55,-0.633,0.7,0],[-31.47,4.6,2.1,4.189,1,0],[-32,3.52,2.1,4.32,1,0],[-32.39,2.38,2.1,4.451,1,0],[-32.62,1.2,2.1,4.581,1,0],[-32.7,0,2.1,4.712,1,0],[-32.62,-1.2,2.1,4.843,1,0],[-32.39,-2.38,2.1,4.974,1,0],[-32,-3.52,2.1,5.105,1,0],[-31.47,-4.6,2.1,5.236,1,0],[31.47,-4.6,2.1,1.047,1,0],[32,-3.52,2.1,1.178,1,0],[32.39,-2.38,2.1,1.309,1,0],[32.62,-1.2,2.1,1.44,1,0],[32.7,0,2.1,1.571,1,0],[32.62,1.2,2.1,1.702,1,0],[32.39,2.38,2.1,1.833,1,0],[32,3.52,2.1,1.963,1,0],[31.47,4.6,2.1,2.094,1,0],[-7.84,-25.66,5.69,1.571,1,0],[7.85,-25.66,5.68,1.571,1,0],[-7.84,25.66,5.69,1.571,1,0],[7.85,25.66,5.68,1.571,1,0],[-9.35,3.65,2.55,0,0.7,0],[-7,3.65,2.55,0,0.7,0],[-5.2,4.07,2.05,0.454,0.7,0],[7,-3.65,2.55,0,0.7,0],[9.35,-3.65,2.55,0,0.7,0],[-18.35,-3.65,2.55,-0.663,0.7,0],[28.5,8,8.35,0,1.2,0],[3.11,14.11,1.68,2.356,0.7,1],[-3.11,14.11,1.68,3.927,0.7,1],[-3.11,7.89,1.68,5.498,0.7,1],[3.11,7.89,1.68,7.069,0.7,1],[-14.89,-5.2,1.9,-2.127,0.7,1],[-15.36,-6.47,1.9,-1.727,0.7,1],[-15.3,-7.82,1.9,-1.327,0.7,1],[-14.72,-9.04,1.9,-0.927,0.7,1],[-13.71,-9.94,1.9,-0.527,0.7,1],[-12.43,-10.37,1.9,-0.127,0.7,1],[-12.43,10.37,1.9,3.269,0.7,1],[-13.71,9.94,1.9,3.669,0.7,1],[-14.72,9.04,1.9,4.069,0.7,1],[-15.3,7.82,1.9,4.469,0.7,1],[-15.36,6.47,1.9,4.869,0.7,1],[-14.89,5.2,1.9,5.269,0.7,1],[12.5,-10.25,1.9,0.127,0.7,1],[13.71,-9.94,1.9,0.527,0.7,1],[14.72,-9.04,1.9,0.927,0.7,1],[15.3,-7.82,1.9,1.327,0.7,1],[15.36,-6.47,1.9,1.727,0.7,1],[14.89,-5.2,1.9,2.127,0.7,1],[14.89,5.2,1.9,1.014,0.7,1],[15.36,6.47,1.9,1.414,0.7,1],[15.3,7.82,1.9,1.814,0.7,1],[14.72,9.04,1.9,2.214,0.7,1],[13.71,9.94,1.9,2.614,0.7,1],[12.43,10.37,1.9,3.014,0.7,1],[-28.5,8,8.35,3.142,1.2,0],[-28,-7.5,8.65,0.052,1.25,0],[-18.35,3.65,2.55,0.663,0.7,0],[18.35,3.65,2.55,2.478,0.7,0],[18.35,-3.65,2.55,-2.478,0.7,0],[2.91,-2.26,1.6,4.73,0.65,0],[2.91,2.26,1.6,-4.73,0.65,0],[-2.91,2.26,1.6,7.871,0.65,0],[5.2,-4.07,2.05,3.595,0.7,0],[-2.91,-2.26,1.6,-7.871,0.65,0],[-7.02,-3.84,2.55,0,0.7,0],[8.03,4.27,1.25,3.107,0.7,0]], DEF_BUSH=[[-16.75,-6.25,0.85],[-14.55,-8.95,0.85],[-12.29,-11.37,0.85],[-7.9,-15.21,0.85],[-5.8,-16.57,0.85],[5.8,-16.57,0.85],[7.9,-15.21,0.85],[12.29,-11.37,0.85],[14.55,-8.95,0.85],[16.84,-6.27,0.85],[-14.16,-16.7,1.55],[-4.83,-22.71,1.55],[-2.63,-23.01,1.25],[2.63,-23.01,1.25],[-16.84,6.27,0.85],[-14.55,8.95,0.85],[-12.29,11.37,0.85],[-7.9,15.21,0.85],[-5.8,16.57,0.85],[5.8,16.57,0.85],[7.9,15.21,0.85],[12,11.5,0.85],[14.55,8.95,0.85],[16.75,6.25,0.85],[-13.79,16.4,1.55],[-4.83,22.71,1.55],[-2.63,23.01,1.25],[2.63,23.01,1.25],[-4.75,-4,1.9],[-14.33,-5.67,1.9],[-14.75,5.5,1.9],[14.04,-16.7,1.55],[4.83,-22.71,1.55],[12.99,16.46,1.55],[4.83,22.71,1.55],[14.8,-5.6,1.9],[4.73,4.12,1.9],[14.8,5.64,1.9],[-9.35,2.55,0.85],[-7,2.55,0.85],[-4.68,2.62,0.85],[4.65,-2.55,0.85],[7,-2.55,0.85],[9.35,-2.55,0.85],[-18.35,-2.55,0.85],[-16,-2.55,0.85],[-14,-2.25,0.85],[13.65,2.55,0.85],[16,2.55,0.85],[18.35,2.55,0.85],[-8.6,-6.4,1.4],[-8.6,6.4,1.4],[-6.3,11,1.4],[-5.4,-11,1.3],[8.6,-6.4,1.4],[8.6,6.4,1.4],[6.3,11,1.4],[5.4,-11,1.3],[-1.42,-2.7,1.4],[1.42,-2.7,1.4],[1.42,2.7,1.4],[-1.42,2.7,1.4],[-0.19,-16.49,1.4],[0.12,16.9,1.4],[-0.56,-22.67,1.4],[1.67,-22.67,1.4],[-0.49,23.58,1.4],[1.86,23.64,1.4]];
+const LANEZ=(lane,x)=>lane===0?0:lane*LANE_AMP/MK*Math.sin(Math.PI*Math.max(0,Math.min(1,(x+25)/50)));
+const CAMP={pequeno:{e:'🐗',n:'Pequeno',c:'#c9a36a'},medio:{e:'🐺',n:'Médio',c:'#d0a050'},grande:{e:'🦏',n:'Grande',c:'#d98a3a'},buff_azul:{e:'🔵',n:'Buff azul',c:'#4aa3ff'},buff_vermelho:{e:'🔴',n:'Buff vermelho',c:'#ff6a6a'},boss:{e:'🐲',n:'Chefe',c:'#c77bff'},rio:{e:'🐊',n:'Objetivo do rio',c:'#37d1b6'}};
+const TOOLS=[['mover','👆 Selecionar/Mover'],['parede','🧱 Parede'],['moita','🌿 Moita'],['animal','🐗 Animal'],['torre','🏰 Torre'],['apagar','🗑 Apagar']];
+const R2=n=>Math.round(n*100)/100;
+
+function defaultMap(){
+ const torres=[];
+ for(const lane of[-1,0,1])for(const team of['b','r']){const d=team==='b'?-1:1;for(const[x,tier]of[[7,1],[16,2]]){const xx=d*x;torres.push({team,lane,tier,x:xx,z:R2(LANEZ(lane*1,xx)*1),range:3.9,hp:tier===2?2340:1800})}}
+ /* LANEZ já usa a amplitude 20.8; lane -1/0/1 multiplica */
+ const camps=[];
+ for(const[x,z]of[[-5,-8],[5,-8],[-5,8],[5,8]])camps.push({x,z,tipo:'pequeno'});
+ for(const[x,z,b]of[[-12,-7,'buff_azul'],[-12,7,'buff_vermelho'],[12,-7,'buff_azul'],[12,7,'buff_vermelho']])camps.push({x,z,tipo:b});
+ camps.push({x:0,z:11,tipo:'boss'},{x:0,z:-11,tipo:'rio'});
+ for(const[x,z]of[[-9,-10],[9,-10],[-9,10],[9,10]])camps.push({x,z,tipo:'medio'});
+ for(const[x,z]of[[-4,-13.5],[4,-13.5],[-4,13.5],[4,13.5]])camps.push({x,z,tipo:'grande'});
+ return{versao:1,paredes:JSON.parse(JSON.stringify(DEF_WALLS)),moitas:JSON.parse(JSON.stringify(DEF_BUSH)),acampamentos:camps,torres,nexus:{b:{x:-23.5,z:0,range:7.5},r:{x:23.5,z:0,range:7.5}}}
+}
+let M=null;
+try{const s=localStorage.getItem('nm_editor_state');if(s)M=JSON.parse(s)}catch(e){}
+if(!M||!Array.isArray(M.paredes))M=defaultMap();
+
+const cv=document.getElementById('cv'),cx=cv.getContext('2d');
+let W=0,H=0,DPR=1,view={x:0,z:0,s:10};
+let tool='mover',sel=null,hist=[];
+const O={team:'b',lane:0,tier:1,camp:'pequeno',th:.7,r:.85,deco:0,range:3.9,mirror:true,snap:true,showLane:true,showRange:true,showGrid:true};
+
+/* ---------- util ---------- */
+const $=id=>document.getElementById(id);
+const w2s=(x,z)=>[(x-view.x)*view.s+W/2,(z-view.z)*view.s+H/2];
+const s2w=(px,py)=>[(px-W/2)/view.s+view.x,(py-H/2)/view.s+view.z];
+const snapv=v=>O.snap?Math.round(v*2)/2:R2(v);
+function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display='none',1800)}
+function save(){try{localStorage.setItem('nm_editor_state',JSON.stringify(M))}catch(e){}}
+function push(){hist.push(JSON.stringify(M));if(hist.length>60)hist.shift()}
+function undo(){if(!hist.length)return toast('Nada para desfazer');M=JSON.parse(hist.pop());sel=null;save();panel();draw()}
+function fit(){const sw=(LIM_X*2+6),sh=(LIM_Z*2+6);view.s=Math.min(W/sw,H/sh);view.x=0;view.z=0;draw()}
+function resize(){DPR=Math.min(2,devicePixelRatio||1);const r=cv.getBoundingClientRect();W=r.width;H=r.height;cv.width=W*DPR;cv.height=H*DPR;cx.setTransform(DPR,0,0,DPR,0,0);draw()}
+
+/* ---------- espelho (simetria azul x vermelho: x -> -x) ---------- */
+function mir(k,e){
+ if(k==='paredes')return[R2(-e[0]),e[1],e[2],R2(-e[3]),e[4],e[5]||0];
+ if(k==='moitas')return[R2(-e[0]),e[1],e[2]];
+ if(k==='acampamentos')return Object.assign({},e,{x:R2(-e.x)});
+ if(k==='torres')return Object.assign({},e,{x:R2(-e.x),team:e.team==='b'?'r':'b'});
+}
+const px=(k,e)=>k==='paredes'||k==='moitas'?e[0]:e.x, pz=(k,e)=>k==='paredes'||k==='moitas'?e[1]:e.z;
+function partner(k,i){
+ if(!O.mirror||k==='nexus')return -1;const e=M[k][i];if(Math.abs(px(k,e))<.3)return -1;
+ const m=mir(k,e);for(let j=0;j<M[k].length;j++){if(j===i)continue;const o=M[k][j];if(Math.abs(px(k,o)-px(k,m))<.06&&Math.abs(pz(k,o)-pz(k,m))<.06)return j}return -1}
+function syncPartner(k,i,j){if(j<0||j>=M[k].length)return;M[k][j]=mir(k,M[k][i])}
+
+/* ---------- desenho ---------- */
+function rr(x,z,len,ang,th,fill,stroke){const[sx,sy]=w2s(x,z);cx.save();cx.translate(sx,sy);cx.rotate(ang);const L=len*view.s,T=th*view.s;cx.fillStyle=fill;cx.fillRect(-L/2,-T/2,L,T);if(stroke){cx.strokeStyle=stroke;cx.lineWidth=2;cx.strokeRect(-L/2,-T/2,L,T)}cx.restore()}
+function circ(x,z,r,fill,stroke,dash){const[sx,sy]=w2s(x,z);cx.beginPath();cx.arc(sx,sy,Math.max(1,r*view.s),0,6.283);if(fill){cx.fillStyle=fill;cx.fill()}if(stroke){cx.setLineDash(dash||[]);cx.strokeStyle=stroke;cx.lineWidth=1.5;cx.stroke();cx.setLineDash([])}}
+function label(txt,x,z,size,color){const[sx,sy]=w2s(x,z);cx.font=size+'px system-ui';cx.textAlign='center';cx.textBaseline='middle';cx.fillStyle=color||'#fff';cx.fillText(txt,sx,sy)}
+const isSel=(k,i)=>sel&&sel.k===k&&sel.i===i;
+function draw(){
+ cx.clearRect(0,0,W,H);cx.fillStyle='#183a2a';cx.fillRect(0,0,W,H);
+ /* arena */
+ const[ax,ay]=w2s(-LIM_X,-LIM_Z),[bx,by]=w2s(LIM_X,LIM_Z);cx.fillStyle='#1f4a33';cx.fillRect(ax,ay,bx-ax,by-ay);cx.strokeStyle='#6fe3a0aa';cx.lineWidth=2;cx.setLineDash([8,6]);cx.strokeRect(ax,ay,bx-ax,by-ay);cx.setLineDash([]);
+ if(O.showGrid){cx.strokeStyle='#ffffff14';cx.lineWidth=1;for(let g=-30;g<=30;g+=5){let[x1,y1]=w2s(g,-30),[x2,y2]=w2s(g,30);cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke();[x1,y1]=w2s(-30,g);[x2,y2]=w2s(30,g);cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke()}
+  cx.strokeStyle='#ffffff40';let[p1,q1]=w2s(0,-30),[p2,q2]=w2s(0,30);cx.beginPath();cx.moveTo(p1,q1);cx.lineTo(p2,q2);cx.stroke()}
+ /* rotas */
+ if(O.showLane){for(const lane of[-1,0,1]){cx.beginPath();for(let x=-25;x<=25;x+=1){const[sx,sy]=w2s(x,LANEZ(lane,x));x===-25?cx.moveTo(sx,sy):cx.lineTo(sx,sy)}cx.strokeStyle='#e6d5a655';cx.lineWidth=Math.max(6,3.4*view.s);cx.lineCap='round';cx.stroke();cx.lineCap='butt'}}
+ /* moitas */
+ M.moitas.forEach((b,i)=>circ(b[0],b[1],b[2],'#2f9e4acc',isSel('moitas',i)?'#fff':'#7dffa0'));
+ /* paredes */
+ M.paredes.forEach((w,i)=>rr(w[0],w[1],w[2],w[3],w[4],w[5]?'#9aa3b5':'#7b8296',isSel('paredes',i)?'#ffe879':'#d7dcea88'));
+ /* acampamentos */
+ M.acampamentos.forEach((c,i)=>{const T=CAMP[c.tipo]||CAMP.pequeno;circ(c.x,c.z,1.1,T.c+'99',isSel('acampamentos',i)?'#fff':T.c);label(T.e,c.x,c.z,Math.max(12,1.6*view.s))});
+ /* torres */
+ M.torres.forEach((t,i)=>{const col=t.team==='b'?'#4aa3ff':'#ff5a5a';
+  if(O.showRange)circ(t.x,t.z,(t.range||3.9)*1.15/MK,col+'14',col+'99',[5,5]);
+  circ(t.x,t.z,.9,col,isSel('torres',i)?'#fff':'#000a');label('🏰',t.x,t.z,Math.max(12,1.5*view.s));label(t.tier+'',t.x,t.z+1.5,Math.max(9,view.s*.9),'#fff')});
+ /* nexus */
+ for(const tm of['b','r']){const n=M.nexus[tm],col=tm==='b'?'#4aa3ff':'#ff5a5a';
+  if(O.showRange)circ(n.x,n.z,(n.range||7.5)*1.4/MK,col+'12',col+'aa',[7,5]);
+  const[sx,sy]=w2s(n.x,n.z),s=2.1*view.s;cx.fillStyle=col;cx.fillRect(sx-s/2,sy-s/2,s,s);cx.strokeStyle=isSel('nexus',tm)?'#fff':'#000';cx.lineWidth=2;cx.strokeRect(sx-s/2,sy-s/2,s,s);label('💎',n.x,n.z,Math.max(12,1.6*view.s))}
+ /* prévia */
+ if(drag&&drag.kind==='wall'){const dx=drag.x1-drag.x0,dz=drag.z1-drag.z0,len=Math.hypot(dx,dz);if(len>.1)rr((drag.x0+drag.x1)/2,(drag.z0+drag.z1)/2,len,Math.atan2(dz,dx),O.th,'#ffe87988','#ffe879')}
+ if(!drag||drag.kind!=='wall'){}
+ $('hint').textContent=hintTxt();
+}
+function hintTxt(){return({mover:'Toque num item para selecionar e arraste para mover. Arraste o fundo para andar no mapa; pinça para zoom.',parede:'Arraste de um ponto a outro para desenhar uma parede.',moita:'Toque no mapa para colocar uma moita.',animal:'Toque no mapa para colocar um animal/acampamento.',torre:'Toque no mapa para colocar uma torre.',apagar:'Toque num item para apagá-lo.'})[tool]+(O.mirror?'  ↔ Espelho ligado.':'')}
+
+/* ---------- seleção por toque ---------- */
+function hit(wx,wz){
+ const tol=Math.max(.6,14/view.s);
+ for(const tm of['b','r']){const n=M.nexus[tm];if(Math.abs(wx-n.x)<1.2+tol/2&&Math.abs(wz-n.z)<1.2+tol/2)return{k:'nexus',i:tm}}
+ for(let i=M.torres.length-1;i>=0;i--){const t=M.torres[i];if(Math.hypot(wx-t.x,wz-t.z)<1+tol/2)return{k:'torres',i}}
+ for(let i=M.acampamentos.length-1;i>=0;i--){const c=M.acampamentos[i];if(Math.hypot(wx-c.x,wz-c.z)<1.2+tol/2)return{k:'acampamentos',i}}
+ for(let i=M.paredes.length-1;i>=0;i--){const w=M.paredes[i],dx=wx-w[0],dz=wz-w[1],c=Math.cos(w[3]),s=Math.sin(w[3]),lx=dx*c+dz*s,lz=-dx*s+dz*c;if(Math.abs(lx)<=w[2]/2+tol/2&&Math.abs(lz)<=w[4]/2+tol/2)return{k:'paredes',i}}
+ for(let i=M.moitas.length-1;i>=0;i--){const b=M.moitas[i];if(Math.hypot(wx-b[0],wz-b[1])<b[2]+tol/2)return{k:'moitas',i}}
+ return null}
+
+/* ---------- ações ---------- */
+function add(k,e){push();M[k].push(e);const i=M[k].length-1;if(O.mirror&&Math.abs(px(k,e))>.3){M[k].push(mir(k,e))}sel={k,i};save();panel();draw()}
+function del(k,i){
+ push();if(k==='nexus'){toast('O Nexus não pode ser apagado; só movido');return}
+ const j=partner(k,i);const rm=[i];if(j>=0)rm.push(j);rm.sort((a,b)=>b-a).forEach(n=>M[k].splice(n,1));sel=null;save();panel();draw()}
+function getEl(){if(!sel)return null;return sel.k==='nexus'?M.nexus[sel.i]:M[sel.k][sel.i]}
+function setXZ(k,i,x,z){
+ if(k==='nexus'){const n=M.nexus[i];n.x=x;n.z=z;if(O.mirror){const o=M.nexus[i==='b'?'r':'b'];o.x=-x;o.z=z}return}
+ const e=M[k][i];if(k==='paredes'||k==='moitas'){e[0]=x;e[1]=z}else{e.x=x;e.z=z}}
+
+/* ---------- ponteiros ---------- */
+const ptrs=new Map();let drag=null,pinch=null;
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,{x:e.offsetX,y:e.offsetY,sx:e.offsetX,sy:e.offsetY});
+ if(ptrs.size===2){drag=null;const[a,b]=[...ptrs.values()];pinch={d:Math.hypot(a.x-b.x,a.y-b.y),s:view.s,cx:(a.x+b.x)/2,cy:(a.y+b.y)/2,vx:view.x,vz:view.z};return}
+ const[wx,wz]=s2w(e.offsetX,e.offsetY);
+ if(tool==='parede'){drag={kind:'wall',x0:snapv(wx),z0:snapv(wz),x1:snapv(wx),z1:snapv(wz)};return}
+ if(tool==='mover'){const h=hit(wx,wz);if(h){sel=h;push();let j=-1;if(h.k!=='nexus')j=partner(h.k,h.i);const el=getEl(),ex=h.k==='nexus'?el.x:px(h.k,el),ez=h.k==='nexus'?el.z:pz(h.k,el);drag={kind:'move',k:h.k,i:h.i,j,ox:wx-ex,oz:wz-ez};panel();draw();return}
+  sel=null;panel();drag={kind:'pan',vx:view.x,vz:view.z,sx:e.offsetX,sy:e.offsetY};draw();return}
+ drag={kind:'tap',sx:e.offsetX,sy:e.offsetY,moved:false,vx:view.x,vz:view.z}});
+cv.addEventListener('pointermove',e=>{const p=ptrs.get(e.pointerId);if(!p)return;p.x=e.offsetX;p.y=e.offsetY;
+ if(pinch&&ptrs.size>=2){const[a,b]=[...ptrs.values()],d=Math.hypot(a.x-b.x,a.y-b.y);view.s=Math.max(3,Math.min(60,pinch.s*d/pinch.d));const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;view.x=pinch.vx-(mx-pinch.cx)/view.s;view.z=pinch.vz-(my-pinch.cy)/view.s;draw();return}
+ if(!drag)return;const[wx,wz]=s2w(e.offsetX,e.offsetY);
+ if(drag.kind==='wall'){drag.x1=snapv(wx);drag.z1=snapv(wz);draw()}
+ else if(drag.kind==='move'){const x=snapv(wx-drag.ox),z=snapv(wz-drag.oz);setXZ(drag.k,drag.i,x,z);if(drag.j>=0)syncPartner(drag.k,drag.i,drag.j);panel();draw()}
+ else if(drag.kind==='pan'||drag.kind==='tap'){const dx=e.offsetX-drag.sx,dy=e.offsetY-drag.sy;if(drag.kind==='tap'&&Math.hypot(dx,dy)>8)drag.kind='pan',drag.vx=view.x,drag.vz=view.z,drag.sx=e.offsetX,drag.sy=e.offsetY;
+  if(drag.kind==='pan'){view.x=drag.vx-(e.offsetX-drag.sx)/view.s;view.z=drag.vz-(e.offsetY-drag.sy)/view.s;draw()}}});
+function up(e){const p=ptrs.get(e.pointerId);ptrs.delete(e.pointerId);if(ptrs.size<2)pinch=null;if(!drag)return;const d=drag;drag=null;
+ if(d.kind==='wall'){const dx=d.x1-d.x0,dz=d.z1-d.z0,len=Math.hypot(dx,dz);if(len>=.5){add('paredes',[R2((d.x0+d.x1)/2),R2((d.z0+d.z1)/2),R2(len),R2(Math.atan2(dz,dx)),O.th,O.deco?1:0])}else draw();return}
+ if(d.kind==='move'){save();panel();draw();return}
+ if(d.kind==='tap'&&p){const[wx,wz]=s2w(p.x,p.y),x=snapv(wx),z=snapv(wz);
+  if(tool==='moita')add('moitas',[x,z,O.r]);
+  else if(tool==='animal')add('acampamentos',{x,z,tipo:O.camp});
+  else if(tool==='torre')add('torres',{team:O.team,lane:O.lane,tier:O.tier,x,z,range:O.range,hp:O.tier===2?2340:1800});
+  else if(tool==='apagar'){const h=hit(wx,wz);if(h)del(h.k,h.i);else toast('Nada aqui')}}
+ save()}
+cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+cv.addEventListener('wheel',e=>{e.preventDefault();const[wx,wz]=s2w(e.offsetX,e.offsetY);view.s=Math.max(3,Math.min(60,view.s*(e.deltaY<0?1.12:.89)));view.x=wx-(e.offsetX-W/2)/view.s;view.z=wz-(e.offsetY-H/2)/view.s;draw()},{passive:false});
+function zoom(f){view.s=Math.max(3,Math.min(60,view.s*f));draw()}
+$('zIn').onclick=()=>zoom(1.25);$('zOut').onclick=()=>zoom(.8);$('zFit').onclick=fit;
+
+/* ---------- painel ---------- */
+function field(lbl,val,fn,o={}){const d=document.createElement('label');d.className='f';d.textContent=lbl;let i;
+ if(o.options){i=document.createElement('select');for(const[v,t]of o.options){const op=document.createElement('option');op.value=v;op.textContent=t;if(String(v)===String(val))op.selected=true;i.appendChild(op)}i.onchange=()=>fn(i.value)}
+ else{i=document.createElement('input');i.type='number';i.step=o.step||'0.05';i.value=val;i.onchange=()=>{const n=parseFloat(i.value);if(Number.isFinite(n))fn(n)}}
+ d.appendChild(i);return d}
+function chk(lbl,val,fn){const d=document.createElement('label');d.className='f chk';const i=document.createElement('input');i.type='checkbox';i.checked=!!val;i.onchange=()=>fn(i.checked);d.appendChild(i);d.appendChild(document.createTextNode(lbl));return d}
+function head(t){const h=document.createElement('h4');h.textContent=t;return h}
+function edit(fn){const el=getEl();if(!el)return;push();const j=sel.k==='nexus'?-1:partner(sel.k,sel.i);fn(el);if(j>=0)syncPartner(sel.k,sel.i,j);if(sel.k==='nexus'&&O.mirror){const o=M.nexus[sel.i==='b'?'r':'b'];o.range=el.range}save();draw()}
+function panel(){
+ const p=$('panel');p.innerHTML='';
+ /* opções da ferramenta */
+ if(tool==='parede'){p.append(head('Nova parede'),field('Espessura',O.th,v=>O.th=v),chk('Decorativa (sem colisão)',O.deco,v=>O.deco=v))}
+ if(tool==='moita'){p.append(head('Nova moita'),field('Raio',O.r,v=>O.r=v))}
+ if(tool==='animal'){p.append(head('Novo animal'),field('Tipo',O.camp,v=>O.camp=v,{options:Object.entries(CAMP).map(([k,v])=>[k,v.e+' '+v.n])}))}
+ if(tool==='torre'){p.append(head('Nova torre'),field('Time',O.team,v=>O.team=v,{options:[['b','Azul'],['r','Vermelho']]}),field('Rota',O.lane,v=>O.lane=+v,{options:[[-1,'Topo'],[0,'Meio'],[1,'Baixo']]}),field('Nível',O.tier,v=>O.tier=+v,{options:[[1,'1 (externa)'],[2,'2 (interna)']]}),field('Alcance',O.range,v=>O.range=v,{step:'0.1'}))}
+ /* item selecionado */
+ const el=getEl();
+ if(el){const k=sel.k;p.append(head('Selecionado: '+({paredes:'Parede',moitas:'Moita',acampamentos:'Animal',torres:'Torre',nexus:'Nexus '+(sel.i==='b'?'azul':'vermelho')})[k]));
+  if(k==='paredes'){p.append(field('X',el[0],v=>edit(e=>e[0]=v)),field('Z',el[1],v=>edit(e=>e[1]=v)),field('Comprimento',el[2],v=>edit(e=>e[2]=Math.max(.2,v))),field('Ângulo (graus)',R2(el[3]*180/Math.PI),v=>edit(e=>e[3]=R2(v*Math.PI/180)),{step:'1'}),field('Espessura',el[4],v=>edit(e=>e[4]=Math.max(.1,v))),chk('Decorativa',el[5],v=>edit(e=>e[5]=v?1:0)))}
+  if(k==='moitas'){p.append(field('X',el[0],v=>edit(e=>e[0]=v)),field('Z',el[1],v=>edit(e=>e[1]=v)),field('Raio',el[2],v=>edit(e=>e[2]=Math.max(.2,v))))}
+  if(k==='acampamentos'){p.append(field('X',el.x,v=>edit(e=>e.x=v)),field('Z',el.z,v=>edit(e=>e.z=v)),field('Tipo',el.tipo,v=>edit(e=>e.tipo=v),{options:Object.entries(CAMP).map(([a,b])=>[a,b.e+' '+b.n])}))}
+  if(k==='torres'){p.append(field('X',el.x,v=>edit(e=>e.x=v)),field('Z',el.z,v=>edit(e=>e.z=v)),field('Time',el.team,v=>edit(e=>e.team=v),{options:[['b','Azul'],['r','Vermelho']]}),field('Rota',el.lane,v=>edit(e=>e.lane=+v),{options:[[-1,'Topo'],[0,'Meio'],[1,'Baixo']]}),field('Nível',el.tier,v=>edit(e=>e.tier=+v),{options:[[1,'1'],[2,'2']]}),field('Alcance',el.range||3.9,v=>edit(e=>e.range=Math.max(.5,v)),{step:'0.1'}),field('Vida',el.hp||1800,v=>edit(e=>e.hp=Math.max(100,v)),{step:'50'}))}
+  if(k==='nexus'){p.append(field('X',el.x,v=>edit(e=>e.x=v)),field('Z',el.z,v=>edit(e=>e.z=v)),field('Alcance do Nexus',el.range,v=>edit(e=>e.range=Math.max(.5,v)),{step:'0.1'}))}
+  if(k!=='nexus'){const b=document.createElement('button');b.className='dng';b.textContent='🗑 Apagar';b.onclick=()=>del(k,sel.i);p.append(b)}}
+ /* geral */
+ p.append(head('Opções'),chk('Espelhar (azul ↔ vermelho)',O.mirror,v=>{O.mirror=v;draw()}),chk('Grade 0,5',O.snap,v=>O.snap=v),chk('Mostrar rotas',O.showLane,v=>{O.showLane=v;draw()}),chk('Mostrar alcance',O.showRange,v=>{O.showRange=v;draw()}),chk('Mostrar grade',O.showGrid,v=>{O.showGrid=v;draw()}));
+ const c=document.createElement('div');c.style.cssText='width:100%;font-size:11px;color:var(--mut)';c.textContent=`Paredes ${M.paredes.length} · Moitas ${M.moitas.length} · Animais ${M.acampamentos.length} · Torres ${M.torres.length}`;p.append(c)}
+function tools(){const t=$('tools');t.innerHTML='';for(const[k,n]of TOOLS){const b=document.createElement('button');b.textContent=n;b.className=k===tool?'on':'';b.onclick=()=>{tool=k;if(k!=='mover')sel=null;tools();panel();draw()};t.appendChild(b)}}
+
+/* ---------- exportar / importar / testar ---------- */
+function exportObj(){const o=JSON.parse(JSON.stringify(M));o.versao=1;return o}
+function json(){return JSON.stringify(exportObj())}
+function dialog(title,msg,txt,btns,ro){$('dTitle').textContent=title;$('dMsg').textContent=msg;const t=$('dTxt');t.value=txt;t.readOnly=!!ro;const b=$('dBtns');b.innerHTML='';for(const[n,f,c]of btns){const x=document.createElement('button');x.textContent=n;if(c)x.className=c;x.onclick=f;b.appendChild(x)}$('dlg').classList.add('open')}
+function closeD(){$('dlg').classList.remove('open')}
+$('bExp').onclick=()=>dialog('Exportar mapa','Copie este JSON e cole em window.NM_MAP no começo do index.html (no lugar de null), ou use "Testar no jogo".',json(),[
+ ['📋 Copiar',async()=>{try{await navigator.clipboard.writeText($('dTxt').value);toast('Copiado!')}catch(e){$('dTxt').select();document.execCommand('copy');toast('Copiado!')}}],
+ ['💾 Baixar .json',()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([json()],{type:'application/json'}));a.download='mapa-neomundi.json';a.click()}],
+ ['Fechar',closeD]],true);
+function importTxt(txt){try{const o=JSON.parse(txt);if(!o||!Array.isArray(o.paredes)||!Array.isArray(o.moitas))throw 0;push();const d=defaultMap();M={versao:1,paredes:o.paredes,moitas:o.moitas,acampamentos:Array.isArray(o.acampamentos)?o.acampamentos:d.acampamentos,torres:Array.isArray(o.torres)?o.torres:d.torres,nexus:o.nexus&&o.nexus.b&&o.nexus.r?o.nexus:d.nexus};sel=null;save();panel();draw();closeD();toast('Mapa importado')}catch(e){toast('JSON inválido')}}
+$('bImp').onclick=()=>dialog('Importar mapa','Cole o JSON aqui ou escolha um arquivo .json.',"",[['✅ Importar',()=>importTxt($('dTxt').value)],['📁 Arquivo…',()=>$('fileIn').click()],['Cancelar',closeD]],false);
+$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>importTxt(String(r.result));r.readAsText(f);e.target.value=''};
+$('bTest').onclick=()=>{try{localStorage.setItem('nm_map_override',json())}catch(e){return toast('Não foi possível salvar neste navegador')}
+ dialog('Mapa salvo neste aparelho','O jogo vai usar este mapa quando abrir (index.html na mesma pasta/endereço). Para voltar ao mapa padrão no jogo, use "Mapa padrão" aqui.','',[['▶ Abrir o jogo',()=>{location.href='index.html'}],['Continuar editando',closeD]],true)};
+$('bReset').onclick=()=>dialog('Voltar ao mapa padrão?','Isso apaga suas edições do editor e o mapa de teste salvo para o jogo neste aparelho.','',[['Sim, restaurar',()=>{push();M=defaultMap();sel=null;try{localStorage.removeItem('nm_map_override')}catch(e){}save();panel();draw();closeD();toast('Mapa padrão restaurado')},'dng'],['Cancelar',closeD]],true);
+$('bUndo').onclick=undo;
+$('bAlign').onclick=()=>{push();let n=0;for(const t of M.torres){const z=R2(LANEZ(+t.lane||0,t.x));if(Math.abs(z-t.z)>.01){t.z=z;n++}}save();panel();draw();toast(n?n+' torre(s) alinhada(s) à rota':'Torres já estão alinhadas')};
+$('dlg').addEventListener('pointerdown',e=>{if(e.target===$('dlg'))closeD()});
+
+addEventListener('resize',resize);new ResizeObserver(resize).observe(cv);
+tools();panel();resize();fit();
+</script></body></html>
