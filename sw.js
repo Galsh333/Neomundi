@@ -1,5 +1,5 @@
 /* Neomundi service worker. Troque VERSION a cada atualização para forçar o aviso de nova versão. */
-const VERSION='neomundi-v25';
+const VERSION='neomundi-v26';
 const SHELL=['./','./index.html','./manifest.webmanifest','./editor-mapa.html','./editor-itens.html','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(VERSION).then(c=>c.addAll(SHELL)).catch(()=>{}))});
 self.addEventListener('activate',e=>{e.waitUntil((async()=>{for(const k of await caches.keys())if(k!==VERSION)await caches.delete(k);await self.clients.claim()})())});
